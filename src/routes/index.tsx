@@ -55,25 +55,32 @@ function Index() {
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true);
     setError("");
-    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
-      body: { action: "list" },
-    });
-    if (invokeError) {
-      setError(invokeError.message || "Não foi possível consultar as empresas.");
-      setLoadingCompanies(false);
-      return;
-    }
-    const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; activeAccounts?: LegacyAccount[]; ok?: boolean }) | null;
-    if (!result || result.error) {
-      setError(result?.error || "Resposta inválida do servidor.");
-    } else {
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
+        body: { action: "list" },
+      });
+      if (invokeError) {
+        setError(invokeError.message || "Não foi possível consultar as empresas.");
+        return;
+      }
+      const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; activeAccounts?: LegacyAccount[]; ok?: boolean }) | null;
+      if (!result || result.error) {
+        setError(result?.error || "Resposta inválida do servidor.");
+        return;
+      }
       const rows = result.companies ?? result.subscriptions ?? result.data;
       if (Array.isArray(rows)) {
         setCompanies(rows);
         setLegacyAccounts(Array.isArray(result.activeAccounts) ? result.activeAccounts : []);
-      } else setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
+      } else {
+        setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
+      }
+    } catch (cause) {
+      console.error("Falha ao carregar empresas", cause);
+      setError("Falha inesperada ao consultar empresas. Verifique a conexão e tente novamente.");
+    } finally {
+      setLoadingCompanies(false);
     }
-    setLoadingCompanies(false);
   }, []);
 
   useEffect(() => {
@@ -145,31 +152,37 @@ function Index() {
 
   const createCompany = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (creatingCompany) return;
     setCreatingCompany(true);
     setError("");
-    const price = Number(newCompany.monthlyPrice.replace(",", "."));
-    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-create-company", {
-      body: {
-        companyName: newCompany.companyName,
-        cnpj: newCompany.cnpj.replace(/\D/g, ""),
-        username: newCompany.username.trim().toUpperCase(),
-        password: newCompany.password,
-        email: newCompany.email,
-        phone: newCompany.phone.replace(/\D/g, ""),
-        monthlyPrice: price,
-      },
-    });
-    const result = data as FunctionError | null;
-    if (invokeError || result?.error) {
-      setError(result?.error || invokeError?.message || "Não foi possível cadastrar a empresa.");
-    } else {
+    try {
+      const price = Number(newCompany.monthlyPrice.replace(",", "."));
+      const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-create-company", {
+        body: {
+          companyName: newCompany.companyName.trim(),
+          cnpj: newCompany.cnpj.replace(/\D/g, ""),
+          username: newCompany.username.trim().toUpperCase(),
+          password: newCompany.password,
+          email: newCompany.email.trim(),
+          phone: newCompany.phone.replace(/\D/g, ""),
+          monthlyPrice: price,
+        },
+      });
+      const result = data as FunctionError | null;
+      if (invokeError || result?.error) {
+        setError(result?.error || invokeError?.message || "Não foi possível cadastrar a empresa.");
+        return;
+      }
       setNewCompany(emptyCompanyForm);
       setShowNewCompany(false);
       await loadCompanies();
-      setError("");
       window.alert(result?.message || "Empresa cadastrada.");
+    } catch (cause) {
+      console.error("Falha ao cadastrar empresa", cause);
+      setError("Falha inesperada ao cadastrar a empresa. Verifique a conexão e tente novamente.");
+    } finally {
+      setCreatingCompany(false);
     }
-    setCreatingCompany(false);
   };
 
   const filtered = companies.filter((company) =>
