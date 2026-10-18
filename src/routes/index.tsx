@@ -1,24 +1,193 @@
+import { useCallback, useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { supabase } from "@/integrations/supabase/client";
 
-// No head() here: the home route inherits title/description/og/twitter from
-// __root.tsx, and ships no og:image so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
-export const Route = createFileRoute("/")({
-  component: Index,
-});
+type Company = {
+  account_id: string;
+  company_name: string;
+  cnpj: string;
+  username: string;
+  email: string | null;
+  phone: string | null;
+  plan_code: string;
+  monthly_price: number;
+  subscription_status: "pending_payment" | "active" | "past_due" | "suspended" | "cancelled";
+  created_at: string;
+  payment_submitted_at?: string | null;
+  payment_confirmed_at?: string | null;
+  payment_notes?: string | null;
+};
 
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
+type AdminProfile = { username: string; role: "admin"; display_name?: string };
+type FunctionError = { error?: string };
+
+export const Route = createFileRoute("/")({ component: Index });
+
+const statusLabels: Record<Company["subscription_status"], string> = {
+  pending_payment: "Aguardando pagamento",
+  active: "Ativa",
+  past_due: "Pagamento atrasado",
+  suspended: "Suspensa",
+  cancelled: "Cancelada",
+};
+
 function Index() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
+  const [username, setUsername] = useState("");
+  const [cnpj, setCnpj] = useState("");
+  const [password, setPassword] = useState("");
+  const [profile, setProfile] = useState<AdminProfile | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [updatingId, setUpdatingId] = useState("");
+
+  const loadCompanies = useCallback(async () => {
+    setLoadingCompanies(true);
+    setError("");
+    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
+      body: { action: "list" },
+    });
+    if (invokeError) {
+      setError(invokeError.message || "Não foi possível consultar as empresas.");
+      setLoadingCompanies(false);
+      return;
+    }
+    const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; ok?: boolean }) | null;
+    if (!result || result.error) {
+      setError(result?.error || "Resposta inválida do servidor.");
+    } else {
+      const rows = result.companies ?? result.subscriptions ?? result.data;
+      if (Array.isArray(rows)) setCompanies(rows);
+      else setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
+    }
+    setLoadingCompanies(false);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!alive || !data.session) return;
+      setProfile({ username: data.session.user.user_metadata?.username ?? "Administrador", role: "admin" });
+      void loadCompanies();
+    });
+    return () => { alive = false; };
+  }, [loadCompanies]);
+
+  const login = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    const cleanCnpj = cnpj.replace(/\D/g, "");
+    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-login", {
+      body: { username: username.trim().toUpperCase(), password, cnpj: cleanCnpj, expectedRole: "admin" },
+    });
+    if (invokeError) {
+      setError(invokeError.message || "Falha ao conectar com o servidor.");
+      setLoading(false);
+      return;
+    }
+    const result = data as (FunctionError & { session?: { access_token: string; refresh_token: string }; profile?: AdminProfile }) | null;
+    if (!result?.session || result.error) {
+      setError(result?.error || "Não foi possível entrar.");
+      setLoading(false);
+      return;
+    }
+    const { error: sessionError } = await supabase.auth.setSession({
+      access_token: result.session.access_token,
+      refresh_token: result.session.refresh_token,
+    });
+    if (sessionError) {
+      setError("Login validado, mas não foi possível iniciar a sessão: " + sessionError.message);
+      setLoading(false);
+      return;
+    }
+    setProfile(result.profile ?? { username: username.trim().toUpperCase(), role: "admin" });
+    setPassword("");
+    setLoading(false);
+    await loadCompanies();
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setProfile(null);
+    setCompanies([]);
+    setError("");
+  };
+
+  const updateStatus = async (company: Company, status: Company["subscription_status"]) => {
+    const actionText = status === "active" ? "ativar" : status === "suspended" ? "suspender" : status === "cancelled" ? "cancelar" : "alterar";
+    if (!window.confirm(`Deseja ${actionText} a empresa "${company.company_name}"?`)) return;
+    setUpdatingId(company.account_id);
+    setError("");
+    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
+      body: { action: "update", accountId: company.account_id, status, note: company.payment_notes ?? "" },
+    });
+    const result = data as FunctionError | null;
+    if (invokeError || result?.error) setError(result?.error || invokeError?.message || "Não foi possível atualizar a empresa.");
+    else await loadCompanies();
+    setUpdatingId("");
+  };
+
+  const filtered = companies.filter((company) =>
+    [company.company_name, company.cnpj, company.username, company.email ?? ""].some((value) =>
+      value.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))
+    )
   );
+  const countActive = companies.filter((c) => c.subscription_status === "active").length;
+  const countSuspended = companies.filter((c) => c.subscription_status === "suspended").length;
+
+  if (!profile) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10 text-slate-100">
+        <section className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl sm:p-8">
+          <div className="mb-7 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-400 font-black text-slate-950">MF</div>
+            <div><p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-300">MobFlow</p><h1 className="text-2xl font-bold">Admin</h1><p className="text-sm text-slate-400">Gestão central de empresas</p></div>
+          </div>
+          <form className="space-y-4" onSubmit={login}>
+            <label className="block text-sm font-medium">Usuário administrador<input required autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 outline-none focus:border-cyan-400" placeholder="Seu usuário" /></label>
+            <label className="block text-sm font-medium">CNPJ administrativo<input required inputMode="numeric" autoComplete="off" value={cnpj} onChange={(e) => setCnpj(e.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 outline-none focus:border-cyan-400" placeholder="14 números" maxLength={18} /></label>
+            <label className="block text-sm font-medium">Senha<input required type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-3 outline-none focus:border-cyan-400" placeholder="Sua senha" /></label>
+            {error && <p role="alert" className="rounded-lg border border-red-900 bg-red-950/60 p-3 text-sm text-red-200">{error}</p>}
+            <button disabled={loading} className="w-full rounded-lg bg-cyan-400 px-4 py-3 font-bold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-60">{loading ? "Conectando..." : "Entrar no Admin"}</button>
+          </form>
+          <p className="mt-5 text-xs leading-5 text-slate-500">Acesso protegido pelo Supabase. Use as credenciais de administrador do MobFlow.</p>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/80">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-400 font-black text-slate-950">MF</div><div><h1 className="text-xl font-bold">MobFlow Admin</h1><p className="text-xs text-slate-400">Conectado ao banco do MobFlow PDV</p></div></div>
+          <div className="flex items-center gap-3"><span className="text-sm text-slate-300">{profile.username}</span><button onClick={logout} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Sair</button></div>
+        </div>
+      </header>
+      <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-2xl font-bold">Visão geral</h2><p className="mt-1 text-sm text-slate-400">Empresas e assinaturas registradas no Supabase.</p></div><button onClick={() => void loadCompanies()} disabled={loadingCompanies} className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-60">{loadingCompanies ? "Atualizando..." : "Atualizar dados"}</button></div>
+        {error && <p role="alert" className="mb-5 rounded-lg border border-red-900 bg-red-950/60 p-3 text-sm text-red-200">{error}</p>}
+        <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Metric label="Empresas cadastradas" value={companies.length} />
+          <Metric label="Empresas ativas" value={countActive} />
+          <Metric label="Empresas suspensas" value={countSuspended} />
+          <Metric label="Aguardando pagamento" value={companies.filter((c) => c.subscription_status === "pending_payment").length} />
+        </div>
+        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+          <div className="flex flex-col gap-3 border-b border-slate-800 p-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="font-semibold">Empresas</h3><p className="text-sm text-slate-400">Dados consultados no banco compartilhado.</p></div><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nome, CNPJ ou usuário..." className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-cyan-400 sm:max-w-sm" /></div>
+          {loadingCompanies ? <p className="p-8 text-center text-slate-400">Carregando empresas...</p> : filtered.length === 0 ? <p className="p-8 text-center text-slate-400">{companies.length ? "Nenhuma empresa corresponde à busca." : "Nenhuma empresa cadastrada ainda."}</p> : (
+            <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Empresa</th><th className="px-4 py-3">Usuário / CNPJ</th><th className="px-4 py-3">Mensalidade</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Ações</th></tr></thead><tbody className="divide-y divide-slate-800">{filtered.map((company) => <tr key={company.account_id} className="hover:bg-slate-800/40"><td className="px-4 py-4"><p className="font-semibold">{company.company_name}</p><p className="mt-1 text-xs text-slate-400">{company.email || "Sem e-mail"}{company.phone ? " · " + company.phone : ""}</p></td><td className="px-4 py-4"><p>{company.username}</p><p className="mt-1 text-xs text-slate-400">{company.cnpj}</p></td><td className="px-4 py-4">R$ {Number(company.monthly_price || 79.9).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td><td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${company.subscription_status === "active" ? "bg-emerald-950 text-emerald-300" : company.subscription_status === "suspended" || company.subscription_status === "cancelled" ? "bg-red-950 text-red-300" : "bg-amber-950 text-amber-300"}`}>{statusLabels[company.subscription_status] || company.subscription_status}</span></td><td className="px-4 py-4"><div className="flex flex-wrap gap-2">{company.subscription_status !== "active" && <button disabled={updatingId === company.account_id} onClick={() => void updateStatus(company, "active")} className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">Ativar</button>}{company.subscription_status !== "suspended" && <button disabled={updatingId === company.account_id} onClick={() => void updateStatus(company, "suspended")} className="rounded-md border border-red-900 px-3 py-1.5 text-xs hover:bg-red-950 disabled:opacity-50">Suspender</button>}</div></td></tr>)}</tbody></table></div>
+          )}
+        </section>
+        <p className="mt-5 text-xs text-slate-500">Acesso administrativo e alterações de status são validados no servidor; o navegador não recebe a chave de serviço.</p>
+      </div>
+    </main>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return <section className="rounded-xl border border-slate-800 bg-slate-900 p-5"><p className="text-sm text-slate-400">{label}</p><p className="mt-2 text-3xl font-bold tracking-tight">{value}</p></section>;
 }
