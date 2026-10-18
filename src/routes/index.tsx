@@ -52,7 +52,7 @@ function Index() {
   const [newCompany, setNewCompany] = useState<NewCompanyForm>(emptyCompanyForm);
   const [creatingCompany, setCreatingCompany] = useState(false);
 
-  const loadCompanies = useCallback(async () => {
+  const loadCompanies = useCallback(async (): Promise<boolean> => {
     setLoadingCompanies(true);
     setError("");
     try {
@@ -61,23 +61,26 @@ function Index() {
       });
       if (invokeError) {
         setError(invokeError.message || "Não foi possível consultar as empresas.");
-        return;
+        return false;
       }
       const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; activeAccounts?: LegacyAccount[]; ok?: boolean }) | null;
       if (!result || result.error) {
         setError(result?.error || "Resposta inválida do servidor.");
-        return;
+        return false;
       }
       const rows = result.companies ?? result.subscriptions ?? result.data;
       if (Array.isArray(rows)) {
         setCompanies(rows);
         setLegacyAccounts(Array.isArray(result.activeAccounts) ? result.activeAccounts : []);
+        return true;
       } else {
         setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
+        return false;
       }
     } catch (cause) {
       console.error("Falha ao carregar empresas", cause);
       setError("Falha inesperada ao consultar empresas. Verifique a conexão e tente novamente.");
+      return false;
     } finally {
       setLoadingCompanies(false);
     }
@@ -85,10 +88,20 @@ function Index() {
 
   useEffect(() => {
     let alive = true;
-    supabase.auth.getSession().then(({ data }) => {
+    void supabase.auth.getSession().then(async ({ data }) => {
       if (!alive || !data.session) return;
-      setProfile({ username: data.session.user.user_metadata?.username ?? "Administrador", role: "admin" });
-      void loadCompanies();
+      const loaded = await loadCompanies();
+      if (!alive) return;
+      if (loaded) {
+        setProfile({ username: data.session.user.user_metadata?.username ?? "Administrador", role: "admin" });
+      } else {
+        // Do not show the admin dashboard when the server has not verified admin access.
+        await supabase.auth.signOut();
+        setProfile(null);
+      }
+    }).catch((cause) => {
+      console.error("Falha ao restaurar sessão administrativa", cause);
+      if (alive) setError("Não foi possível validar a sessão. Entre novamente.");
     });
     return () => { alive = false; };
   }, [loadCompanies]);
