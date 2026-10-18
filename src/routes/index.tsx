@@ -147,11 +147,11 @@ function Index() {
     const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-create-company", {
       body: {
         companyName: newCompany.companyName,
-        cnpj: newCompany.cnpj.replace(/\\D/g, ""),
+        cnpj: newCompany.cnpj.replace(/\D/g, ""),
         username: newCompany.username.trim().toUpperCase(),
         password: newCompany.password,
         email: newCompany.email,
-        phone: newCompany.phone.replace(/\\D/g, ""),
+        phone: newCompany.phone.replace(/\D/g, ""),
         monthlyPrice: price,
       },
     });
