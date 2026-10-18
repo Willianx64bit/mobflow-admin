@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -85,7 +86,7 @@ function Index() {
     return () => { alive = false; };
   }, [loadCompanies]);
 
-  const login = async (event: React.FormEvent<HTMLFormElement>) => {
+  const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoading(true);
     setError("");
@@ -142,7 +143,7 @@ function Index() {
   };
 
 
-  const createCompany = async (event: React.FormEvent<HTMLFormElement>) => {
+  const createCompany = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setCreatingCompany(true);
     setError("");
