@@ -98,8 +98,24 @@ Deno.serve(async (req) => {
       owner_id: accountId, state: initialState, updated_at: new Date().toISOString(),
     });
     if (stateError) {
-      console.error("company initial state insert failed", stateError.message);
-      return json({ error: "A empresa foi cadastrada, mas o espaço inicial de dados não foi criado. Contate o suporte." }, 500);
+      // Roll back every row created by this request so retries do not leave a half-created company.
+      const rollbackResults = await Promise.all([
+        admin.from("account_allowlist").delete().eq("username", username).eq("cnpj", cnpj),
+        admin.from("profiles").delete().eq("id", accountId),
+        admin.from("companies").delete().eq("account_id", accountId),
+        admin.from("app_state").delete().eq("owner_id", accountId),
+      ]);
+      const rollbackFailed = rollbackResults.some((result) => result.error);
+      const { error: deleteUserError } = await admin.auth.admin.deleteUser(accountId);
+      console.error("company initial state insert failed", stateError.message, {
+        rollbackFailed,
+        deleteUserFailed: Boolean(deleteUserError),
+      });
+      return json({
+        error: rollbackFailed || deleteUserError
+          ? "Não foi possível concluir o cadastro e houve uma falha na limpeza automática. Verifique os registros antes de tentar novamente."
+          : "Não foi possível criar o espaço inicial de dados. Nenhuma empresa nova foi mantida; tente novamente.",
+      }, 500);
     }
     return json({ ok: true, message: "Empresa cadastrada e aguardando ativação da assinatura.", accountId });
   } catch (error) {
