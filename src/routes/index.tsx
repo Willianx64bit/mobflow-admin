@@ -20,7 +20,10 @@ type Company = {
 
 type LegacyAccount = { account_id: string; company_name: string; cnpj: string; usernames: string[]; user_count: number; status: "active" };
 type AdminProfile = { username: string; role: "admin"; display_name?: string };
-type FunctionError = { error?: string };
+type FunctionError = { error?: string; message?: string };
+type NewCompanyForm = { companyName: string; cnpj: string; username: string; password: string; email: string; phone: string; monthlyPrice: string };
+const emptyCompanyForm: NewCompanyForm = { companyName: "", cnpj: "", username: "", password: "", email: "", phone: "", monthlyPrice: "79,90" };
+
 
 export const Route = createFileRoute("/")({ component: Index });
 
@@ -43,7 +46,7 @@ function Index() {
   const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [updatingId, setUpdatingId] = useState("");
+  const [updatingId, setUpdatingId] = useState("");\n  const [showNewCompany, setShowNewCompany] = useState(false);\n  const [newCompany, setNewCompany] = useState<NewCompanyForm>(emptyCompanyForm);\n  const [creatingCompany, setCreatingCompany] = useState(false);
 
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true);
@@ -135,6 +138,36 @@ function Index() {
     setUpdatingId("");
   };
 
+
+  const createCompany = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreatingCompany(true);
+    setError("");
+    const price = Number(newCompany.monthlyPrice.replace(",", "."));
+    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-create-company", {
+      body: {
+        companyName: newCompany.companyName,
+        cnpj: newCompany.cnpj.replace(/\\D/g, ""),
+        username: newCompany.username.trim().toUpperCase(),
+        password: newCompany.password,
+        email: newCompany.email,
+        phone: newCompany.phone.replace(/\\D/g, ""),
+        monthlyPrice: price,
+      },
+    });
+    const result = data as FunctionError | null;
+    if (invokeError || result?.error) {
+      setError(result?.error || invokeError?.message || "Não foi possível cadastrar a empresa.");
+    } else {
+      setNewCompany(emptyCompanyForm);
+      setShowNewCompany(false);
+      await loadCompanies();
+      setError("");
+      window.alert(result?.message || "Empresa cadastrada.");
+    }
+    setCreatingCompany(false);
+  };
+
   const filtered = companies.filter((company) =>
     [company.company_name, company.cnpj, company.username, company.email ?? ""].some((value) =>
       value.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))
@@ -175,6 +208,21 @@ function Index() {
       </header>
       <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6">
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-2xl font-bold">Visão geral</h2><p className="mt-1 text-sm text-slate-400">Empresas e assinaturas registradas no Supabase.</p></div><button onClick={() => void loadCompanies()} disabled={loadingCompanies} className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-60">{loadingCompanies ? "Atualizando..." : "Atualizar dados"}</button></div>
+        <div className="mb-6 flex justify-end"><button onClick={() => setShowNewCompany((value) => !value)} className="rounded-lg bg-cyan-400 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-cyan-300">{showNewCompany ? "Fechar cadastro" : "+ Cadastrar nova empresa"}</button></div>
+        {showNewCompany && <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
+          <h3 className="text-lg font-semibold">Cadastrar nova empresa</h3>
+          <p className="mb-4 mt-1 text-sm text-slate-400">O cadastro cria um espaço de dados separado. A assinatura começa aguardando ativação.</p>
+          <form onSubmit={createCompany} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="text-sm">Nome da empresa<input required minLength={2} maxLength={120} value={newCompany.companyName} onChange={(e) => setNewCompany({ ...newCompany, companyName: e.target.value })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">CNPJ<input required maxLength={18} value={newCompany.cnpj} onChange={(e) => setNewCompany({ ...newCompany, cnpj: e.target.value })} placeholder="00.000.000/0000-00" className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">Usuário gerente<input required minLength={3} maxLength={40} value={newCompany.username} onChange={(e) => setNewCompany({ ...newCompany, username: e.target.value.toUpperCase() })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">Senha inicial<input required type="password" minLength={8} maxLength={128} autoComplete="new-password" value={newCompany.password} onChange={(e) => setNewCompany({ ...newCompany, password: e.target.value })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">E-mail<input required type="email" value={newCompany.email} onChange={(e) => setNewCompany({ ...newCompany, email: e.target.value })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">Telefone com DDD<input required inputMode="tel" value={newCompany.phone} onChange={(e) => setNewCompany({ ...newCompany, phone: e.target.value })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <label className="text-sm">Mensalidade (R$)<input required inputMode="decimal" value={newCompany.monthlyPrice} onChange={(e) => setNewCompany({ ...newCompany, monthlyPrice: e.target.value })} className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5" /></label>
+            <div className="flex items-end"><button disabled={creatingCompany} className="w-full rounded-lg bg-cyan-400 px-4 py-2.5 font-bold text-slate-950 disabled:opacity-60">{creatingCompany ? "Cadastrando..." : "Criar empresa"}</button></div>
+          </form>
+        </section>
         {error && <p role="alert" className="mb-5 rounded-lg border border-red-900 bg-red-950/60 p-3 text-sm text-red-200">{error}</p>}
         <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label="Empresas / contas encontradas" value={totalAccounts} />
