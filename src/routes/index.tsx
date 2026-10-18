@@ -252,7 +252,7 @@ function Index() {
       <header className="border-b border-slate-800 bg-slate-900/80">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-400 font-black text-slate-950">MF</div><div><h1 className="text-xl font-bold">MobFlow Admin</h1><p className="text-xs text-slate-400">Conectado ao banco do MobFlow PDV</p></div></div>
-          <div className="flex items-center gap-3"><span className="text-sm text-slate-300">{profile.username}</span><button onClick={logout} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Sair</button></div>
+          <div className="flex flex-wrap items-center gap-3"><button onClick={() => setShowNewCompany((value) => !value)} className="rounded-lg bg-cyan-400 px-3 py-2 text-sm font-bold text-slate-950 hover:bg-cyan-300">{showNewCompany ? "Fechar cadastro" : "+ Cadastrar nova empresa"}</button><span className="text-sm text-slate-300">{profile.username}</span><button onClick={logout} className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800">Sair</button></div>
         </div>
       </header>
       <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6">
