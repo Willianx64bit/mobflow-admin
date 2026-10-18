@@ -108,36 +108,45 @@ function Index() {
 
   const login = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (loading) return;
     setLoading(true);
     setError("");
-    const cleanCnpj = cnpj.replace(/\D/g, "");
-    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-login", {
-      body: { username: username.trim().toUpperCase(), password, cnpj: cleanCnpj, expectedRole: "admin" },
-    });
-    if (invokeError) {
-      setError(invokeError.message || "Falha ao conectar com o servidor.");
+    try {
+      const cleanCnpj = cnpj.replace(/\D/g, "");
+      const { data, error: invokeError } = await supabase.functions.invoke("mobflow-login", {
+        body: { username: username.trim().toUpperCase(), password, cnpj: cleanCnpj, expectedRole: "admin" },
+      });
+      if (invokeError) {
+        setError(invokeError.message || "Falha ao conectar com o servidor.");
+        return;
+      }
+      const result = data as (FunctionError & { session?: { access_token: string; refresh_token: string }; profile?: AdminProfile }) | null;
+      if (!result?.session || result.error || result.profile?.role !== "admin") {
+        setError(result?.error || "Este acesso não possui permissão de administrador.");
+        return;
+      }
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: result.session.access_token,
+        refresh_token: result.session.refresh_token,
+      });
+      if (sessionError) {
+        setError("Login validado, mas não foi possível iniciar a sessão: " + sessionError.message);
+        return;
+      }
+      const loaded = await loadCompanies();
+      if (!loaded) {
+        await supabase.auth.signOut();
+        setProfile(null);
+        return;
+      }
+      setProfile(result.profile);
+      setPassword("");
+    } catch (cause) {
+      console.error("Falha no login administrativo", cause);
+      setError("Falha inesperada ao entrar. Verifique a conexão e tente novamente.");
+    } finally {
       setLoading(false);
-      return;
     }
-    const result = data as (FunctionError & { session?: { access_token: string; refresh_token: string }; profile?: AdminProfile }) | null;
-    if (!result?.session || result.error) {
-      setError(result?.error || "Não foi possível entrar.");
-      setLoading(false);
-      return;
-    }
-    const { error: sessionError } = await supabase.auth.setSession({
-      access_token: result.session.access_token,
-      refresh_token: result.session.refresh_token,
-    });
-    if (sessionError) {
-      setError("Login validado, mas não foi possível iniciar a sessão: " + sessionError.message);
-      setLoading(false);
-      return;
-    }
-    setProfile(result.profile ?? { username: username.trim().toUpperCase(), role: "admin" });
-    setPassword("");
-    setLoading(false);
-    await loadCompanies();
   };
 
   const logout = async () => {
@@ -151,15 +160,25 @@ function Index() {
   const updateStatus = async (company: Company, status: Company["subscription_status"]) => {
     const actionText = status === "active" ? "ativar" : status === "suspended" ? "suspender" : status === "cancelled" ? "cancelar" : "alterar";
     if (!window.confirm(`Deseja ${actionText} a empresa "${company.company_name}"?`)) return;
+    if (updatingId) return;
     setUpdatingId(company.account_id);
     setError("");
-    const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
-      body: { action: "update", accountId: company.account_id, status, note: company.payment_notes ?? "" },
-    });
-    const result = data as FunctionError | null;
-    if (invokeError || result?.error) setError(result?.error || invokeError?.message || "Não foi possível atualizar a empresa.");
-    else await loadCompanies();
-    setUpdatingId("");
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke("mobflow-admin-subscriptions", {
+        body: { action: "update", accountId: company.account_id, status, note: company.payment_notes ?? "" },
+      });
+      const result = data as FunctionError | null;
+      if (invokeError || result?.error) {
+        setError(result?.error || invokeError?.message || "Não foi possível atualizar a empresa.");
+      } else {
+        await loadCompanies();
+      }
+    } catch (cause) {
+      console.error("Falha ao atualizar assinatura", cause);
+      setError("Falha inesperada ao atualizar a empresa. Tente novamente.");
+    } finally {
+      setUpdatingId("");
+    }
   };
 
 
