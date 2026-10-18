@@ -43,14 +43,22 @@ Deno.serve(async (req) => {
     if (phone.length < 10 || phone.length > 13) return json({ error: "Informe um telefone com DDD." }, 400);
     if (!Number.isFinite(monthlyPrice) || monthlyPrice !== 79.9) return json({ error: "A mensalidade atual do MobFlow é R$ 79,90." }, 400);
 
-    const [{ data: existingCnpj, error: cnpjError }, { data: existingUsername, error: usernameError }, { data: existingEmail, error: emailError }] = await Promise.all([
+    const [
+      { data: existingCnpj, error: cnpjError },
+      { data: existingUsername, error: usernameError },
+      { data: existingEmail, error: emailError },
+      { data: existingAllowlist, error: allowlistCheckError },
+    ] = await Promise.all([
       admin.from("companies").select("account_id").eq("cnpj", cnpj).maybeSingle(),
       admin.from("profiles").select("id").eq("username", username).maybeSingle(),
       admin.from("companies").select("account_id").ilike("email", email).maybeSingle(),
+      admin.from("account_allowlist").select("username").eq("username", username).eq("cnpj", cnpj).maybeSingle(),
     ]);
-    if (cnpjError || usernameError || emailError) return json({ error: "Não foi possível validar os dados." }, 500);
+    if (cnpjError || usernameError || emailError || allowlistCheckError) {
+      return json({ error: "Não foi possível validar os dados." }, 500);
+    }
     if (existingCnpj) return json({ error: "Já existe uma empresa com esse CNPJ." }, 409);
-    if (existingUsername) return json({ error: "Esse usuário já está em uso." }, 409);
+    if (existingUsername || existingAllowlist) return json({ error: "Esse usuário já está em uso ou já está autorizado." }, 409);
     if (existingEmail) return json({ error: "Já existe uma empresa com esse e-mail." }, 409);
 
     const authEmail = username.toLowerCase().replace(/[^a-z0-9._-]/g, "-") + "@accounts.mobflow.local";
