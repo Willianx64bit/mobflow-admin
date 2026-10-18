@@ -18,6 +18,7 @@ type Company = {
   payment_notes?: string | null;
 };
 
+type LegacyAccount = { account_id: string; company_name: string; cnpj: string; usernames: string[]; user_count: number; status: "active" };
 type AdminProfile = { username: string; role: "admin"; display_name?: string };
 type FunctionError = { error?: string };
 
@@ -37,6 +38,7 @@ function Index() {
   const [password, setPassword] = useState("");
   const [profile, setProfile] = useState<AdminProfile | null>(null);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [legacyAccounts, setLegacyAccounts] = useState<LegacyAccount[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [error, setError] = useState("");
@@ -54,13 +56,15 @@ function Index() {
       setLoadingCompanies(false);
       return;
     }
-    const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; ok?: boolean }) | null;
+    const result = data as (FunctionError & { companies?: Company[]; subscriptions?: Company[]; data?: Company[]; activeAccounts?: LegacyAccount[]; ok?: boolean }) | null;
     if (!result || result.error) {
       setError(result?.error || "Resposta inválida do servidor.");
     } else {
       const rows = result.companies ?? result.subscriptions ?? result.data;
-      if (Array.isArray(rows)) setCompanies(rows);
-      else setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
+      if (Array.isArray(rows)) {
+        setCompanies(rows);
+        setLegacyAccounts(Array.isArray(result.activeAccounts) ? result.activeAccounts : []);
+      } else setError("O servidor respondeu, mas não retornou a lista esperada de empresas.");
     }
     setLoadingCompanies(false);
   }, []);
@@ -113,6 +117,7 @@ function Index() {
     await supabase.auth.signOut();
     setProfile(null);
     setCompanies([]);
+    setLegacyAccounts([]);
     setError("");
   };
 
@@ -135,8 +140,9 @@ function Index() {
       value.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))
     )
   );
-  const countActive = companies.filter((c) => c.subscription_status === "active").length;
+  const countActive = companies.filter((c) => c.subscription_status === "active").length + legacyAccounts.length;
   const countSuspended = companies.filter((c) => c.subscription_status === "suspended").length;
+  const totalAccounts = companies.length + legacyAccounts.length;
 
   if (!profile) {
     return (
@@ -171,18 +177,26 @@ function Index() {
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-2xl font-bold">Visão geral</h2><p className="mt-1 text-sm text-slate-400">Empresas e assinaturas registradas no Supabase.</p></div><button onClick={() => void loadCompanies()} disabled={loadingCompanies} className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-60">{loadingCompanies ? "Atualizando..." : "Atualizar dados"}</button></div>
         {error && <p role="alert" className="mb-5 rounded-lg border border-red-900 bg-red-950/60 p-3 text-sm text-red-200">{error}</p>}
         <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="Empresas cadastradas" value={companies.length} />
+          <Metric label="Empresas / contas encontradas" value={totalAccounts} />
           <Metric label="Empresas ativas" value={countActive} />
           <Metric label="Empresas suspensas" value={countSuspended} />
           <Metric label="Aguardando pagamento" value={companies.filter((c) => c.subscription_status === "pending_payment").length} />
         </div>
         <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
           <div className="flex flex-col gap-3 border-b border-slate-800 p-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="font-semibold">Empresas</h3><p className="text-sm text-slate-400">Dados consultados no banco compartilhado.</p></div><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nome, CNPJ ou usuário..." className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-cyan-400 sm:max-w-sm" /></div>
-          {loadingCompanies ? <p className="p-8 text-center text-slate-400">Carregando empresas...</p> : filtered.length === 0 ? <p className="p-8 text-center text-slate-400">{companies.length ? "Nenhuma empresa corresponde à busca." : "Nenhuma empresa cadastrada ainda."}</p> : (
+          {loadingCompanies ? <p className="p-8 text-center text-slate-400">Carregando empresas...</p> : filtered.length === 0 && legacyAccounts.filter((a) => [a.company_name, a.cnpj, ...a.usernames].some((v) => v.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")))).length === 0 ? <p className="p-8 text-center text-slate-400">{totalAccounts ? "Nenhuma empresa corresponde à busca." : "Nenhuma empresa ou conta cadastrada encontrada."}</p> : (
             <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-950/70 text-xs uppercase tracking-wide text-slate-400"><tr><th className="px-4 py-3">Empresa</th><th className="px-4 py-3">Usuário / CNPJ</th><th className="px-4 py-3">Mensalidade</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Ações</th></tr></thead><tbody className="divide-y divide-slate-800">{filtered.map((company) => <tr key={company.account_id} className="hover:bg-slate-800/40"><td className="px-4 py-4"><p className="font-semibold">{company.company_name}</p><p className="mt-1 text-xs text-slate-400">{company.email || "Sem e-mail"}{company.phone ? " · " + company.phone : ""}</p></td><td className="px-4 py-4"><p>{company.username}</p><p className="mt-1 text-xs text-slate-400">{company.cnpj}</p></td><td className="px-4 py-4">R$ {Number(company.monthly_price || 79.9).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</td><td className="px-4 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${company.subscription_status === "active" ? "bg-emerald-950 text-emerald-300" : company.subscription_status === "suspended" || company.subscription_status === "cancelled" ? "bg-red-950 text-red-300" : "bg-amber-950 text-amber-300"}`}>{statusLabels[company.subscription_status] || company.subscription_status}</span></td><td className="px-4 py-4"><div className="flex flex-wrap gap-2">{company.subscription_status !== "active" && <button disabled={updatingId === company.account_id} onClick={() => void updateStatus(company, "active")} className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold hover:bg-emerald-600 disabled:opacity-50">Ativar</button>}{company.subscription_status !== "suspended" && <button disabled={updatingId === company.account_id} onClick={() => void updateStatus(company, "suspended")} className="rounded-md border border-red-900 px-3 py-1.5 text-xs hover:bg-red-950 disabled:opacity-50">Suspender</button>}</div></td></tr>)}</tbody></table></div>
           )}
+          {legacyAccounts.filter((a) => [a.company_name, a.cnpj, ...a.usernames].some((v) => v.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")))).length > 0 && <div className="border-t border-slate-800 p-4">
+            <h4 className="font-semibold">Contas antigas do PDV</h4>
+            <p className="mb-3 mt-1 text-sm text-slate-400">Contas existentes antes do cadastro de assinaturas. Elas são exibidas sem criar registros duplicados nem alterar o estoque.</p>
+            <div className="space-y-3">{legacyAccounts.filter((a) => [a.company_name, a.cnpj, ...a.usernames].some((v) => v.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")))).map((account) => <div key={account.account_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+              <div><p className="font-semibold">{account.company_name}</p><p className="mt-1 text-xs text-slate-400">Usuários: {account.usernames.join(", ") || "—"} · CNPJ: {account.cnpj || "não informado"}</p></div>
+              <span className="rounded-full bg-emerald-950 px-2.5 py-1 text-xs font-semibold text-emerald-300">Conta existente · {account.user_count} usuário(s)</span>
+            </div>)}</div>
+          </div>}
         </section>
-        <p className="mt-5 text-xs text-slate-500">Acesso administrativo e alterações de status são validados no servidor; o navegador não recebe a chave de serviço.</p>
+        <p className="mt-5 text-xs text-slate-500">Contas antigas são apenas identificadas nesta tela; para gerenciar assinatura é necessário cadastrá-las corretamente no registro de empresas. O navegador não recebe a chave de serviço.</p>
       </div>
     </main>
   );
