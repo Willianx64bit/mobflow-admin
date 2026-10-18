@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
     if (password.length < 8 || password.length > 128) return json({ error: "A senha deve ter entre 8 e 128 caracteres." }, 400);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: "Informe um e-mail válido." }, 400);
     if (phone.length < 10 || phone.length > 13) return json({ error: "Informe um telefone com DDD." }, 400);
-    if (!Number.isFinite(monthlyPrice) || monthlyPrice <= 0 || monthlyPrice > 999999.99) return json({ error: "Mensalidade inválida." }, 400);
+    if (!Number.isFinite(monthlyPrice) || monthlyPrice !== 79.9) return json({ error: "A mensalidade atual do MobFlow é R$ 79,90." }, 400);
 
     const [{ data: existingCnpj, error: cnpjError }, { data: existingUsername, error: usernameError }, { data: existingEmail, error: emailError }] = await Promise.all([
       admin.from("companies").select("account_id").eq("cnpj", cnpj).maybeSingle(),
@@ -68,16 +68,27 @@ Deno.serve(async (req) => {
       plan_code: "complete", monthly_price: monthlyPrice, payment_method: "pix", subscription_status: "pending_payment",
     });
     if (companyError) {
+      await admin.auth.admin.deleteUser(accountId);
       console.error("company row insert failed", companyError.message);
-      return json({ error: companyError.code === "23505" ? "Já existe cadastro com esse CNPJ ou e-mail." : "O acesso foi criado, mas não foi possível salvar a empresa. Contate o suporte antes de tentar novamente." }, companyError.code === "23505" ? 409 : 500);
+      return json({ error: companyError.code === "23505" ? "Já existe cadastro com esse CNPJ ou e-mail." : "Não foi possível salvar a empresa." }, companyError.code === "23505" ? 409 : 500);
     }
     const { error: profileErrorInsert } = await admin.from("profiles").insert({
       id: accountId, username, cnpj, account_id: accountId, role: "manager", active: true,
       display_name: companyName, permissions: ["PDV", "Conferência", "Validade", "Fiado", "Gerência"],
     });
     if (profileErrorInsert) {
+      await admin.from("companies").delete().eq("account_id", accountId);
+      await admin.auth.admin.deleteUser(accountId);
       console.error("company profile insert failed", profileErrorInsert.message);
-      return json({ error: "O cadastro foi iniciado, mas o perfil não foi finalizado. Contate o suporte." }, 500);
+      return json({ error: profileErrorInsert.code === "23505" ? "Esse usuário já está em uso." : "Não foi possível preparar o perfil da empresa." }, profileErrorInsert.code === "23505" ? 409 : 500);
+    }
+    const { error: allowlistError } = await admin.from("account_allowlist").insert({ username, cnpj, active: true });
+    if (allowlistError) {
+      await admin.from("profiles").delete().eq("id", accountId);
+      await admin.from("companies").delete().eq("account_id", accountId);
+      await admin.auth.admin.deleteUser(accountId);
+      console.error("company allowlist insert failed", allowlistError.message);
+      return json({ error: allowlistError.code === "23505" ? "Esse usuário já está autorizado em outra conta." : "Não foi possível autorizar o acesso da empresa." }, allowlistError.code === "23505" ? 409 : 500);
     }
     const initialState = {
       products: [], cart: [], sales: [], conferences: [], receiving: [],
