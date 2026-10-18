@@ -46,7 +46,10 @@ function Index() {
   const [loadingCompanies, setLoadingCompanies] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [updatingId, setUpdatingId] = useState("");\n  const [showNewCompany, setShowNewCompany] = useState(false);\n  const [newCompany, setNewCompany] = useState<NewCompanyForm>(emptyCompanyForm);\n  const [creatingCompany, setCreatingCompany] = useState(false);
+  const [updatingId, setUpdatingId] = useState("");
+  const [showNewCompany, setShowNewCompany] = useState(false);
+  const [newCompany, setNewCompany] = useState<NewCompanyForm>(emptyCompanyForm);
+  const [creatingCompany, setCreatingCompany] = useState(false);
 
   const loadCompanies = useCallback(async () => {
     setLoadingCompanies(true);
